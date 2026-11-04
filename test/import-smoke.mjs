@@ -12,11 +12,14 @@ assert.ok(Array.isArray(mod.inject), 'inject 必须是数组')
 assert.equal(typeof mod.apply, 'function', 'apply 必须是函数')
 assert.equal('Config' in mod, false, '本插件不导出 Config(默认值手写合并)')
 
-// 静态依赖检查:只允许 node: 内置模块的静态 import(避免 pnpm file: 解析问题)
+// 静态依赖检查:只允许 node: 内置模块 + 包内相对路径(避免 pnpm file: 解析不到裸包名)
 const source = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 for (const line of source.split(/\r?\n/)) {
   const matched = /^\s*import\s[^\n]*\bfrom\s+['"]([^'"]+)['"]/.exec(line)
-  if (matched) assert.ok(matched[1].startsWith('node:'), '静态 import 只允许 node: 内置模块,发现: ' + matched[1])
+  if (!matched) continue
+  const spec = matched[1]
+  const ok = spec.startsWith('node:') || spec.startsWith('./') || spec.startsWith('../')
+  assert.ok(ok, '静态 import 只允许 node: 内置模块或包内相对路径,发现: ' + spec)
 }
 // v0.2.0 起不再伪造用户消息:必须没有 dsh-llm 的运行时依赖
 assert.equal(source.includes('@deepseek-ai/dsh-llm'), false, '不再依赖 dsh-llm 构造用户消息')

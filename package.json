@@ -1,28 +1,40 @@
 {
   "name": "@dawn/dsh-auto-evolve",
-  "version": "0.3.1",
-  "description": "DSH 自进化宿主插件（M3-a）：每累计 N 次工具调用，导出会话并 detached 拉起 bg-review；bg-review 两段式审查后直接写技能库（不再产草稿等人审）；session-start 注入待审清单；持续写 plugin-heartbeat.json。",
+  "version": "0.4.0",
+  "description": "DSH 自进化宿主插件（M3-a）+ 进化看板：每累计 N 次工具调用导出会话并 detached 拉起 bg-review，两段式审查后直接写技能库；会话页新增「进化」Tab，展示技能触发次数、进化路线与审查心跳。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": {
       "default": "./lib/index.js"
     },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/dashboard.js",
+    "lib/client.js",
     "cordis.patch.yml",
     "README.md"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "react"
+      ],
+      "platform": "web",
+      "immediately": true
     }
   },
   "scripts": {
-    "test": "node test/mock-ctx.mjs && node test/import-smoke.mjs"
+    "test": "node test/mock-ctx.mjs && node test/import-smoke.mjs && node test/dashboard-smoke.mjs"
   },
   "license": "MIT"
 }

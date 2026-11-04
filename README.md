@@ -3,6 +3,8 @@
 DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zstd 会话日志」的胶水：**在 DSH 进程内**直接拿到会话历史，
 按累计工具调用数节流写进 review 队列，再 detached 拉起 `bg-review.mjs` 做后台审查。审查、落草稿、记账本全部仍在 `bg-review.mjs` 里。
 
+同一个包还带一个**进化看板**：会话页新增「进化」Tab，把技能触发次数、进化路线时间线和审查心跳摊开看（见下文）。
+
 契约唯一事实源：`C:/Users/DawnCloud/.dsh/evolution/M3-PLUGIN-CONTRACT.md` §1 §2。
 
 ## 文件
@@ -11,9 +13,12 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 |:--|:--|
 | `package.json` | 纯 ESM 包声明；`dsh.bundle.patch` 指向 `cordis.patch.yml`，安装后自动挂进 profile layer stack |
 | `cordis.patch.yml` | 一行 `insert`: `id: auto-evolve`, `name: '@dawn/dsh-auto-evolve'`, `config: {}` |
-| `lib/index.js` | 插件入口，`export { name, inject, apply }`（**不导出 Config**，参考 `@dawn/dsh-git-graphic`） |
+| `lib/index.js` | 宿主插件入口，`export { name, inject, apply }`（**不导出 Config**，参考 `@dawn/dsh-git-graphic`） |
+| `lib/dashboard.js` | 看板宿主半边：只读聚合 `evolutionDir`，注册 `/api/evolve-dashboard/*` 路由 |
+| `lib/client.js` | 看板浏览器端：`window.__ModuleLoader__.load` 格式，注册「进化」Tab（React，零构建） |
 | `test/mock-ctx.mjs` | 最小假 ctx + 假 agent 的行为测试（队列结构、心跳、注入、降级不崩、写失败不抛） |
 | `test/import-smoke.mjs` | 导入冒烟：导出齐全、无外部静态依赖、apply 可跑 |
+| `test/dashboard-smoke.mjs` | 看板路由冒烟：4 个端点、聚合正确、坏行容错、非法 slug 400、dispose 干净 |
 
 ## 行为
 
@@ -86,12 +91,34 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 | `bgReviewScript` | `<evolutionDir>/bg-review.mjs` | 后台审查脚本路径 |
 | `draftsInjectLimit` | `5` | session-start 最多列出几条草稿 |
 
+## 进化看板（会话页「进化」Tab）
+
+同一个包同时提供看板：宿主半边在 `lib/dashboard.js`，浏览器端在 `lib/client.js`。
+
+- **概况卡**：技能总数/活跃/归档、累计触发次数、路线事件（草稿/改写/转正/退役）、待审队列
+- **审查心跳**：插件版本、pid、累计工具调用、每 N 次审查一轮、今日审查次数、最近结论与错误
+- **技能触发次数榜**：按 `use_count` 降序，条形 + 状态徽章 + 是否已转正；点一行看技能正文
+- **进化路线时间线**：`ledger.jsonl` 事件流，动作分色，带原因、置信度、模型、会话
+- 纯只读、零构建；页面可见时 8 秒自动刷新
+
+数据接口（POST + JSON，供 client fetch）：
+
+| 路径 | 返回 |
+|:--|:--|
+| `/api/evolve-dashboard/overview` | 心跳 + 审查状态 + 汇总计数 |
+| `/api/evolve-dashboard/skills` | 技能清单（按 useCount 降序） |
+| `/api/evolve-dashboard/timeline` | 账本事件（默认 200 条，`{limit}` 可调） |
+| `/api/evolve-dashboard/skill` | 单个技能正文 `{slug}` |
+
+> 宿主半边通过 `ctx.inject(['webServer'])` 延迟挂载：headless 等没有 webServer 的宿主自动跳过，不影响审查主流程。
+> 数据目录跟随 `config.evolutionDir`（默认 `C:/Users/DawnCloud/.dsh/evolution`）。
+
 ## 安装（由 Lead 执行，勿在队友会话里直接改 profile）
 
 1. `C:/Users/DawnCloud/.dsh/profiles/desktop/package.json`：`dependencies` 加 `"@dawn/dsh-auto-evolve": "file:E:/JUST_DO_IT/dsh-auto-evolve"`，
    `dsh.profile.bundles` 数组加 `"@dawn/dsh-auto-evolve"`。
 2. 在该目录 `pnpm install`。
-3. 重启 DSH 桌面应用（cordis 宿主插件在主进程加载，热更不生效）。
+3. 重启 DSH 桌面应用（cordis 宿主插件在主进程加载，热更不生效）；桌面端再刷新页面（Ctrl+R）才会注入「进化」Tab。
 
 > 首次上线想更保守，可先在 `cordis.patch.yml` 的 `config:` 里写 `enabled: false`，确认能加载、心跳出现后再改回。
 
@@ -110,6 +137,11 @@ cd E:/JUST_DO_IT/dsh-auto-evolve
 2. 累计满 10 次工具调用（`plugin-heartbeat.json` 里的 `itersSinceReview` 到 10）→ `~/.dsh/evolution/review/queue/<session>-<turn>.json` 出现；
 3. 新开会话且 `drafts/` 里有 `status: draft` 的草稿 → 上下文出现「【后台沉淀草稿待审】」；
 4. `~/.dsh/evolution/review/last-result.json` 由 `bg-review.mjs` 产出（审查链路见 M3 契约 §3）。
+
+看板半边：
+
+5. `POST http://127.0.0.1:9985/api/evolve-dashboard/overview` 返回 200 且 `counts.skills` 非 0；
+6. 会话页出现「进化」Tab，技能榜与时间线有数据（触发次数为 0 说明遥测还没累加，正常）。
 
 ## 回退
 

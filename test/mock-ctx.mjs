@@ -138,6 +138,34 @@ const FAKE_BG_REVIEW = [
   '',
 ].join('\n')
 
+/** 增长型假 agent:每轮多一次工具调用(不新增消息体以外的副作用),用来驱动 itersSinceReview 递增。 */
+function makeGrowingAgent(sessionId) {
+  const base = sessionMessages()
+  let extra = 0
+  return {
+    injected: [],
+    __grow() {
+      extra += 1
+    },
+    session: {
+      header: { id: sessionId, cwd: 'C:/Users/DawnCloud/.dsh/profiles/desktop' },
+      deriveMessages() {
+        const extraMsgs = []
+        for (let i = 0; i < extra; i += 1) {
+          extraMsgs.push({
+            id: 'grow-' + i,
+            role: 'assistant',
+            content: [{ type: 'tool-call', id: 'grow-call-' + i, name: 'bash', arguments: '{}' }],
+            source: { kind: 'model' },
+          })
+        }
+        return base.concat(extraMsgs)
+      },
+    },
+    inject() {},
+  }
+}
+
 function setupQueueEnv(overrides = {}) {
   const root = makeRoot()
   const evolutionDir = path.join(root, 'evolution')
@@ -145,7 +173,8 @@ function setupQueueEnv(overrides = {}) {
   const bgReviewScript = path.join(evolutionDir, 'bg-review.mjs')
   writeFileSync(bgReviewScript, FAKE_BG_REVIEW, 'utf8')
   const ctx = makeMockCtx()
-  plugin.apply(ctx, { evolutionDir, nodePath: process.execPath, bgReviewScript, ...overrides })
+  // v0.3.1 起按累计工具调用数触发(默认 nudgeInterval=10);测试里缩到 1 便于观察触发节奏
+  plugin.apply(ctx, { evolutionDir, nodePath: process.execPath, bgReviewScript, nudgeInterval: 1, ...overrides })
   const agent = makeMockAgent()
   return {
     root,
@@ -158,6 +187,8 @@ function setupQueueEnv(overrides = {}) {
 }
 
 async function fireTurn(ctx, agent, turnNo) {
+  // 增长型 agent:每轮模拟新增一次工具调用,让 itersSinceReview 按轮递增
+  if (agent && typeof agent.__grow === 'function') agent.__grow()
   await ctx.emit('agent/turn-stopping', { agent, turn: turnNo, signal: undefined })
 }
 
@@ -210,24 +241,21 @@ async function waitForFile(file, timeoutMs) {
   return existsSync(file)
 }
 
-test('a) turn-stopping 第 3 轮命中:队列 JSON 结构 / 截断 / transcript', async () => {
+test('a) turn-stopping 首轮命中(nudgeInterval=1):队列 JSON 结构 / 截断 / transcript', async () => {
   const env = setupQueueEnv()
   assert.equal(env.ctx.handlerCount('agent/turn-stopping'), 1)
   assert.equal(env.ctx.handlerCount('agent/session-start'), 1)
 
+  // nudgeInterval=1 且会话里已有 1 次工具调用:第 1 轮即命中
   await fireTurn(env.ctx, env.agent, 1)
-  await fireTurn(env.ctx, env.agent, 2)
-  assert.equal(queueFiles(env.queueDir).length, 0, '未到 everyTurns=3 不应写队列')
-
-  await fireTurn(env.ctx, env.agent, 3)
   const files = queueFiles(env.queueDir)
-  assert.deepEqual(files, ['sess-abc_weird-3.json'], '文件名为 <sanitize(sessionId)>-<turn>.json')
+  assert.deepEqual(files, ['sess-abc_weird-1.json'], '文件名为 <sanitize(sessionId)>-<turn>.json')
 
   const queue = JSON.parse(readFileSync(path.join(env.queueDir, files[0]), 'utf8'))
   assert.equal(queue.schema, 1)
   assert.equal(queue.producer, 'dsh-auto-evolve')
   assert.equal(queue.sessionId, 'sess-abc/weird', 'sessionId 保留原始值')
-  assert.equal(queue.turn, 3)
+  assert.equal(queue.turn, 1)
   assert.equal(queue.cwd, 'C:/Users/DawnCloud/.dsh/profiles/desktop')
   assert.ok(!Number.isNaN(Date.parse(queue.createdAt)), 'createdAt 是 ISO 时间')
   assert.equal(queue.messageCount, 5, 'system 消息被过滤')
@@ -249,7 +277,7 @@ test('a) turn-stopping 第 3 轮命中:队列 JSON 结构 / 截断 / transcript'
   assert.ok(!JSON.stringify(queue).includes('内部思考'), 'reasoning 内容不得泄漏进队列')
   assert.ok(!JSON.stringify(queue).includes('bogus-extension'))
 
-  assert.ok(queue.transcript.includes('### turn 3'), 'transcript 带 turn 标题')
+  assert.ok(queue.transcript.includes('### turn 1'), 'transcript 带 turn 标题')
   assert.ok(queue.transcript.includes('[user] 帮我看看这个 bug'))
   assert.ok(queue.transcript.includes('[assistant] 我先读一下文件'))
   assert.ok(queue.transcript.includes('[tool-call] read'))
@@ -262,15 +290,15 @@ test('a) turn-stopping 第 3 轮命中:队列 JSON 结构 / 截断 / transcript'
   // 假脚本记录 process.argv.slice(2),即 node 与脚本路径之后的全部参数
   assert.deepEqual(spawned.argv, [
     '--queue-file',
-    path.join(env.queueDir, 'sess-abc_weird-3.json'),
+    path.join(env.queueDir, 'sess-abc_weird-1.json'),
     '--trigger',
     'plugin',
   ])
 
-  // 冷却期内不再触发(everyTurns 命中但 cooldown=30min 挡住)
+  // 冷却期内不再触发(cooldown=30min 挡住后续轮次)
+  await fireTurn(env.ctx, env.agent, 2)
+  await fireTurn(env.ctx, env.agent, 3)
   await fireTurn(env.ctx, env.agent, 4)
-  await fireTurn(env.ctx, env.agent, 5)
-  await fireTurn(env.ctx, env.agent, 6)
   assert.equal(queueFiles(env.queueDir).length, 1, 'cooldown 内不得再写队列')
 })
 
@@ -295,7 +323,7 @@ test('b) 心跳文件:apply 即写,turnsSeen 递增,字段齐全', async () => {
   await fireTurn(env.ctx, env.agent, 3)
   const afterThree = readHeartbeat(env.heartbeatFile)
   assert.equal(afterThree.turnsSeen, 3, 'turnsSeen 随 turn-stopping 递增')
-  assert.equal(afterThree.lastQueueFile, path.join(env.queueDir, 'sess-abc_weird-3.json'))
+  assert.equal(afterThree.lastQueueFile, path.join(env.queueDir, 'sess-abc_weird-1.json'))
 
   await fireTurn(env.ctx, env.agent, 4)
   assert.equal(readHeartbeat(env.heartbeatFile).turnsSeen, 4)
@@ -363,7 +391,7 @@ test('d) deriveMessages 抛错 / 缺失时不崩,心跳记 lastError', async () 
   const root = makeRoot()
   const evolutionDir = path.join(root, 'evolution')
   const ctx = makeMockCtx()
-  plugin.apply(ctx, { evolutionDir })
+  plugin.apply(ctx, { evolutionDir, nudgeInterval: 1 })
   const broken = makeMockAgent({ deriveError: new Error('derive boom') })
   for (const turnNo of [1, 2, 3]) await fireTurn(ctx, broken, turnNo)
   const heartbeat = readHeartbeat(path.join(evolutionDir, 'review', 'plugin-heartbeat.json'))
@@ -375,7 +403,7 @@ test('d) deriveMessages 抛错 / 缺失时不崩,心跳记 lastError', async () 
   // d-2:agent.session 存在但没有 deriveMessages(老版本/降级场景)
   const evolutionDir2 = path.join(makeRoot(), 'evolution')
   const ctx2 = makeMockCtx()
-  plugin.apply(ctx2, { evolutionDir: evolutionDir2 })
+  plugin.apply(ctx2, { evolutionDir: evolutionDir2, nudgeInterval: 1 })
   const legacy = makeMockAgent()
   legacy.session = { header: { id: 'legacy-session', cwd: 'C:/tmp' } }
   for (const turnNo of [1, 2, 3]) await fireTurn(ctx2, legacy, turnNo)
@@ -386,7 +414,7 @@ test('d) deriveMessages 抛错 / 缺失时不崩,心跳记 lastError', async () 
   // d-3:连 agent 都没有(事件载荷异常)
   const evolutionDir3 = path.join(makeRoot(), 'evolution')
   const ctx3 = makeMockCtx()
-  plugin.apply(ctx3, { evolutionDir: evolutionDir3 })
+  plugin.apply(ctx3, { evolutionDir: evolutionDir3, nudgeInterval: 1 })
   for (const turnNo of [1, 2, 3]) await fireTurn(ctx3, undefined, turnNo)
   const heartbeat3 = readHeartbeat(path.join(evolutionDir3, 'review', 'plugin-heartbeat.json'))
   assert.ok(String(heartbeat3.lastError).includes('agent.session'), '空 agent 也只记 lastError,不抛')
@@ -426,17 +454,19 @@ test('f) enabled=false 时只写心跳,不写队列、不拉子进程', async ()
 })
 
 test('g) 日上限 dailyCap 生效', async () => {
-  const env = setupQueueEnv({ everyTurns: 1, cooldownMinutes: 0, dailyCap: 2 })
-  for (const turnNo of [1, 2, 3, 4]) await fireTurn(env.ctx, env.agent, turnNo)
+  const env = setupQueueEnv({ cooldownMinutes: 0, dailyCap: 2 })
+  // 增长型 agent:每轮新增一次工具调用,保证每轮都重新达到 nudgeInterval=1
+  const agent = makeGrowingAgent('grow-1')
+  for (const turnNo of [1, 2, 3, 4]) await fireTurn(env.ctx, agent, turnNo)
   const files = queueFiles(env.queueDir)
   assert.equal(files.length, 2, 'dailyCap=2 只允许两次,实际: ' + files.join(','))
-  assert.deepEqual(files, ['sess-abc_weird-1.json', 'sess-abc_weird-2.json'])
+  assert.deepEqual(files, ['grow-1-1.json', 'grow-1-2.json'])
   assert.equal(readHeartbeat(env.heartbeatFile).turnsSeen, 4)
 })
 
 test('h) 子代理会话 turn-stopping:不写队列、turnsSeen 不涨', async () => {
-  // everyTurns=1 + cooldown=0:主会话每轮都会触发,便于对照
-  const env = setupQueueEnv({ everyTurns: 1, cooldownMinutes: 0 })
+  // nudgeInterval=1 + cooldown=0:主会话首轮即触发,便于对照
+  const env = setupQueueEnv({ cooldownMinutes: 0 })
 
   const byOrigin = makeMockAgent({ sessionId: 'sub-origin', origin: 'subagent' })
   for (const turnNo of [1, 2, 3]) await fireTurn(env.ctx, byOrigin, turnNo)
@@ -608,18 +638,17 @@ test('n) 插件自己注入的消息不进 review 队列(source.kind 以 plugin:
       {
         id: 'a-1',
         role: 'assistant',
-        content: [{ type: 'text', text: '好的' }],
+        // 带一次工具调用:v0.3.1 按累计工具调用数触发,没有 tool-call 就不会命中
+        content: [{ type: 'text', text: '好的' }, { type: 'tool-call', id: 'n-c1', name: 'bash', arguments: '{}' }],
         source: { kind: 'model', provider: 'deepseek', model: 'deepseek-chat' },
       },
     ],
   })
 
   await fireTurn(env.ctx, agent, 1)
-  await fireTurn(env.ctx, agent, 2)
-  await fireTurn(env.ctx, agent, 3)
 
   const files = queueFiles(env.queueDir)
-  assert.equal(files.length, 1, '第 3 轮应写出 1 个队列文件')
+  assert.equal(files.length, 1, '第 1 轮应写出 1 个队列文件')
   const queue = JSON.parse(readFileSync(path.join(env.queueDir, files[0]), 'utf8'))
   assert.equal(queue.messageCount, 2, '注入消息被过滤,只剩 user + assistant')
   assert.ok(!JSON.stringify(queue).includes('后台沉淀草稿待审'), '插件自己的提醒不得进 review 语料')
