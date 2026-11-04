@@ -1,0 +1,12 @@
+# @dawn/dsh-auto-evolve 宿主插件挂载(dsh.bundle.patch 自动应用)
+#
+# 安装后 DSH 读取 package.json 的 dsh.bundle.patch,自动把本文件加入 profile 的
+# layer stack;宿主插件随 DSH 启动自动加载,无 run 卡片、无启停控件。
+#
+# config 保持空对象即可:本插件不导出 schemastery Config(参考 @dawn/dsh-git-graphic),
+# 所有配置默认值在 lib/index.js 的 resolveConfig() 里手写合并。
+
+- insert:
+    - id: auto-evolve
+      name: '@dawn/dsh-auto-evolve'
+      config: {}
