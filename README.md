@@ -1,7 +1,7 @@
 # @dawn/dsh-auto-evolve
 
 DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zstd 会话日志」的胶水：**在 DSH 进程内**直接拿到会话历史，
-按 turn 节流写进 review 队列，再 detached 拉起 `bg-review.mjs` 做后台审查。审查、落草稿、记账本全部仍在 `bg-review.mjs` 里。
+按累计工具调用数节流写进 review 队列，再 detached 拉起 `bg-review.mjs` 做后台审查。审查、落草稿、记账本全部仍在 `bg-review.mjs` 里。
 
 契约唯一事实源：`C:/Users/DawnCloud/.dsh/evolution/M3-PLUGIN-CONTRACT.md` §1 §2。
 
@@ -19,7 +19,9 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 
 1. **`agent/turn-stopping`**
    - 每次轮次结束 `turnsSeen += 1`，写心跳。
-   - 节流命中条件（全部满足）：`turnsSeen % everyTurns === 0`、距上次触发 ≥ `cooldownMinutes`、当日触发数 < `dailyCap`。
+   - 每轮先数一遍本轮新增的 `tool-call` 块（`itersSinceReview += 本轮累计 - 上轮累计`；会话被裁剪时增量记 0，不回退）。
+   - 节流命中条件（全部满足）：`itersSinceReview >= nudgeInterval`、距上次触发 ≥ `cooldownMinutes`、当日触发数 < `dailyCap`。
+   - 顺带做技能使用遥测：只扫本轮新增消息里的技能调用，动态加载 `<evolutionDir>/lib/skill-usage.mjs` 累加 `use_count`；遥测失败绝不影响主流程。
    - 命中后：`agent.session.deriveMessages()` → 防御性归一化 → 写
      `<evolutionDir>/review/queue/<sanitize(sessionId)>-<turn>.json`（先写 `.tmp` 再 `rename`，原子替换）→
      `spawn(nodePath, [bgReviewScript, '--queue-file', file, '--trigger', 'plugin'], { detached: true, stdio: 'ignore', windowsHide: true })` + `unref()`。
@@ -36,7 +38,7 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
    - 保留它们是为了排查「重启恢复旧会话时 session-start 是否被错过」。
 4. **心跳（观测用）**
    - `apply` 时写；之后每次 `turn-stopping` / `session-start` / 非子代理 `pre-step` 都刷新。
-   - 字段：`{ plugin, version, pid, startedAt, lastTurnAt, turnsSeen, lastQueueFile, lastError, lastSessionStartAt, lastSessionStartSource, noticePushes, lastNoticeAt, lastNoticeTrigger, preStepChecks }`。
+   - 字段：`{ plugin, version, pid, startedAt, lastTurnAt, turnsSeen, itersSinceReview, itersTotal, nudgeInterval, lastQueueFile, lastError, lastSessionStartAt, lastSessionStartSource, noticePushes, lastNoticeAt, lastNoticeTrigger, preStepChecks }`。
    - 排查用途：`lastSessionStartAt` 长期为 `null` 而 `preStepChecks` 在涨 = 重启时确实错过了 session-start；
      `noticePushes` / `lastNoticeAt` 说明草稿提醒到底推没推到模型上下文里。
 5. **子代理 / 委派会话完全静默**
@@ -74,7 +76,8 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 | 键 | 默认值 | 说明 |
 |:--|:--|:--|
 | `enabled` | `true` | 总开关；`false` 时只写心跳，不写队列、不拉子进程 |
-| `everyTurns` | `3` | 每 N 个 turn 才可能触发一次 |
+| `nudgeInterval` | `10` | 累计 N 次工具调用才可能触发一次审查（对齐 Hermes 的 `_skill_nudge_interval`） |
+| `everyTurns` | `3` | **已废弃**，仅保留字段以兼容老配置（v0.2.x 按轮数触发） |
 | `cooldownMinutes` | `30` | 两次触发之间的最小间隔（分钟），`0` = 不冷却 |
 | `dailyCap` | `12` | 每自然日最多触发次数（本地日切） |
 | `maxMessages` | `120` | 队列里最多保留多少条消息 |
@@ -104,7 +107,7 @@ cd E:/JUST_DO_IT/dsh-auto-evolve
 装好后（真实 DSH 里）：
 
 1. `~/.dsh/evolution/review/plugin-heartbeat.json` 出现，`turnsSeen` 随对话增长；
-2. 聊满 3 个 turn → `~/.dsh/evolution/review/queue/<session>-<turn>.json` 出现；
+2. 累计满 10 次工具调用（`plugin-heartbeat.json` 里的 `itersSinceReview` 到 10）→ `~/.dsh/evolution/review/queue/<session>-<turn>.json` 出现；
 3. 新开会话且 `drafts/` 里有 `status: draft` 的草稿 → 上下文出现「【后台沉淀草稿待审】」；
 4. `~/.dsh/evolution/review/last-result.json` 由 `bg-review.mjs` 产出（审查链路见 M3 契约 §3）。
 
