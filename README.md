@@ -5,7 +5,7 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 
 同一个包还带一个**进化看板**：会话页新增「进化」Tab，把技能触发次数、进化路线时间线和审查心跳摊开看（见下文）。
 
-契约唯一事实源：`C:/Users/DawnCloud/.dsh/evolution/M3-PLUGIN-CONTRACT.md` §1 §2。
+契约唯一事实源：`evolution/CONTRACT.md` §1 §2（安装后位于 `<evolutionDir>/CONTRACT.md`）。
 
 ## 文件
 
@@ -19,6 +19,9 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 | `test/mock-ctx.mjs` | 最小假 ctx + 假 agent 的行为测试（队列结构、心跳、注入、降级不崩、写失败不抛） |
 | `test/import-smoke.mjs` | 导入冒烟：导出齐全、无外部静态依赖、apply 可跑 |
 | `test/dashboard-smoke.mjs` | 看板路由冒烟：4 个端点、聚合正确、坏行容错、非法 slug 400、dispose 干净 |
+| `evolution/bg-review.mjs` | **后台审查器**：读队列 → 两段式 LLM 审查 → 落草稿 / 改写技能 / 记账本（独立进程，装到 `<evolutionDir>/`） |
+| `evolution/lib/*.mjs` | 审查器依赖：`llm`（凭证+重试）、`session`（多帧 zstd）、`prompt`（模板）、`ledger`、`skills-index`、`skill-usage`、`curator` |
+| `evolution/CONTRACT.md` | 插件 ↔ 审查器契约（队列格式、心跳字段、CLI 行为） |
 
 ## 行为
 
@@ -62,7 +65,7 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
   "producer": "dsh-auto-evolve",
   "sessionId": "原始 session id",
   "turn": 12,
-  "cwd": "C:/Users/DawnCloud/.dsh/profiles/desktop",
+  "cwd": "<会话工作目录>",
   "createdAt": "2026-10-28T17:00:00.000Z",
   "messageCount": 42,
   "messages": [{ "role": "user", "parts": [{ "kind": "text", "text": "..." }] }],
@@ -86,8 +89,8 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 | `cooldownMinutes` | `30` | 两次触发之间的最小间隔（分钟），`0` = 不冷却 |
 | `dailyCap` | `12` | 每自然日最多触发次数（本地日切） |
 | `maxMessages` | `120` | 队列里最多保留多少条消息 |
-| `evolutionDir` | `C:/Users/DawnCloud/.dsh/evolution` | 自进化根目录（queue/drafts/心跳都在它下面） |
-| `nodePath` | `C:/Program Files/nodejs/node.exe` | 拉起 bg-review 用的 node |
+| `evolutionDir` | `~/.dsh/evolution` | 自进化根目录（queue/drafts/心跳都在它下面） |
+| `nodePath` | `DSH_NODE_PATH` → Windows 标准 Node → `node`（PATH） | 拉起 bg-review 用的 node |
 | `bgReviewScript` | `<evolutionDir>/bg-review.mjs` | 后台审查脚本路径 |
 | `draftsInjectLimit` | `5` | session-start 最多列出几条草稿 |
 
@@ -111,24 +114,58 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 | `/api/evolve-dashboard/skill` | 单个技能正文 `{slug}` |
 
 > 宿主半边通过 `ctx.inject(['webServer'])` 延迟挂载：headless 等没有 webServer 的宿主自动跳过，不影响审查主流程。
-> 数据目录跟随 `config.evolutionDir`（默认 `C:/Users/DawnCloud/.dsh/evolution`）。
+> 数据目录跟随 `config.evolutionDir`（默认 `~/.dsh/evolution`）。
 
-## 安装（由 Lead 执行，勿在队友会话里直接改 profile）
+## 审查链路（`evolution/`）
 
-1. `C:/Users/DawnCloud/.dsh/profiles/desktop/package.json`：`dependencies` 加 `"@dawn/dsh-auto-evolve": "file:E:/JUST_DO_IT/dsh-auto-evolve"`，
+插件只负责「导出消息 + 拉进程」，真正干活的 `bg-review.mjs` 在 `evolution/` 里，**独立进程运行**（改审查逻辑不用重启 DSH）：
+
+```
+插件 turn-stopping → 写 <evolutionDir>/review/queue/*.json
+  → detached spawn node bg-review.mjs --queue-file <file> --trigger plugin
+      ├─ 读队列（优先 transcript）
+      ├─ 两段式 LLM 审查（deepseek-chat，严格 JSON）
+      ├─ none：只记账；draft（conf ≥ 0.6）：写 drafts/<slug>.md + ledger.jsonl
+      ├─ 直接改写/转正已有技能（diff + 备份 + 校验）
+      ├─ 删队列文件；写 review/last-result.json
+      └─ 退出码恒 0（异常全吞，日志 review/bg-review.log）
+```
+
+审查器不需要安装依赖：只用 Node 内置模块。**复制到数据目录即可**：
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\evolution" | Out-Null
+Copy-Item -Recurse -Force .\evolution\* "$env:USERPROFILE\.dsh\evolution\"
+```
+
+> 也可以不复制：把插件配置里的 `bgReviewScript` 指向仓库里的 `evolution/bg-review.mjs`。
+> 但技能使用遥测会从 `<evolutionDir>/lib/skill-usage.mjs` 动态加载，建议还是整目录复制。
+
+运行前提：
+- `node` ≥ 20：插件按 `DSH_NODE_PATH` → Windows 标准安装路径 → PATH 的顺序找。
+- `~/.dsh/.credentials.yaml` 里有 `DEEPSEEK_API_KEY`（审查器自己读，**不读环境变量、不写日志**）。
+- **数据外发**：队列文件含会话内容，会被发往 `api.deepseek.com` 做审查；不想发就把插件 `enabled: false`，或改 `evolution/lib/llm.mjs` 的 endpoint。
+- 草稿不会自动生效：人在会话里看到「【后台沉淀草稿待审】」后决定转正 / 合并 / 丢弃。
+
+## 安装
+
+1. `git clone https://github.com/DawnCloud1213/dsh-auto-evolve.git`
+2. DSH profile 的 `package.json`：`dependencies` 加 `"@dawn/dsh-auto-evolve": "file:<clone 路径>"`，
    `dsh.profile.bundles` 数组加 `"@dawn/dsh-auto-evolve"`。
-2. 在该目录 `pnpm install`。
-3. 重启 DSH 桌面应用（cordis 宿主插件在主进程加载，热更不生效）；桌面端再刷新页面（Ctrl+R）才会注入「进化」Tab。
+3. 该 profile 目录执行 `pnpm install`。
+4. 把 `evolution/` 复制到 `~/.dsh/evolution/`（见上节）。
+5. 重启 DSH 桌面应用（cordis 宿主插件在主进程加载，热更不生效）；桌面端再刷新页面（Ctrl+R）才会注入「进化」Tab。
 
 > 首次上线想更保守，可先在 `cordis.patch.yml` 的 `config:` 里写 `enabled: false`，确认能加载、心跳出现后再改回。
 
 ## 验证
 
 ```powershell
-cd E:/JUST_DO_IT/dsh-auto-evolve
-& 'C:/Program Files/nodejs/node.exe' --check lib/index.js
-& 'C:/Program Files/nodejs/node.exe' test/import-smoke.mjs
-& 'C:/Program Files/nodejs/node.exe' test/mock-ctx.mjs
+node --check lib/index.js
+node --check evolution/bg-review.mjs
+node test/import-smoke.mjs
+node test/mock-ctx.mjs
+node test/dashboard-smoke.mjs
 ```
 
 装好后（真实 DSH 里）：
@@ -136,7 +173,7 @@ cd E:/JUST_DO_IT/dsh-auto-evolve
 1. `~/.dsh/evolution/review/plugin-heartbeat.json` 出现，`turnsSeen` 随对话增长；
 2. 累计满 10 次工具调用（`plugin-heartbeat.json` 里的 `itersSinceReview` 到 10）→ `~/.dsh/evolution/review/queue/<session>-<turn>.json` 出现；
 3. 新开会话且 `drafts/` 里有 `status: draft` 的草稿 → 上下文出现「【后台沉淀草稿待审】」；
-4. `~/.dsh/evolution/review/last-result.json` 由 `bg-review.mjs` 产出（审查链路见 M3 契约 §3）。
+4. `~/.dsh/evolution/review/last-result.json` 由 `bg-review.mjs` 产出（审查链路见 `evolution/CONTRACT.md` §3）。
 
 看板半边：
 
@@ -146,7 +183,7 @@ cd E:/JUST_DO_IT/dsh-auto-evolve
 ## 回退
 
 profile 的 `package.json` 删掉依赖 + `dsh.profile.bundles` 删掉条目 → `pnpm install` → 重启。
-本包目录留着不引用就不会加载；`review/plugin-heartbeat.json` 停止更新即为「已卸载」证据。
+本包目录留着不引用就不会加载；`<evolutionDir>/review/plugin-heartbeat.json` 停止更新即为「已卸载」证据。
 
 ## 注意
 

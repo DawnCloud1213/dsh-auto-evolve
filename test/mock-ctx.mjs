@@ -3,7 +3,7 @@
 // 运行: node test/mock-ctx.mjs        (node:test,全绿 = exit 0)
 //
 // 安全约定:所有用例的 evolutionDir 都指向 os.tmpdir() 下的临时目录,
-// 绝不写真实 C:/Users/DawnCloud/.dsh/evolution(测试结束统一清理)。
+// 绝不写真实的 ~/.dsh/evolution(测试结束统一清理)。
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -112,7 +112,7 @@ function makeMockAgent(options = {}) {
     session: {
       header: {
         id: options.sessionId === undefined ? 'sess-abc/weird' : options.sessionId,
-        cwd: options.cwd === undefined ? 'C:/Users/DawnCloud/.dsh/profiles/desktop' : options.cwd,
+        cwd: options.cwd === undefined ? 'C:/work/dsh-profile' : options.cwd,
         // 子代理判定字段:官方 SessionHeader 的 origin / delegationDepth
         ...(options.origin === undefined ? {} : { origin: options.origin }),
         ...(options.delegationDepth === undefined ? {} : { delegationDepth: options.delegationDepth }),
@@ -148,7 +148,7 @@ function makeGrowingAgent(sessionId) {
       extra += 1
     },
     session: {
-      header: { id: sessionId, cwd: 'C:/Users/DawnCloud/.dsh/profiles/desktop' },
+      header: { id: sessionId, cwd: 'C:/work/dsh-profile' },
       deriveMessages() {
         const extraMsgs = []
         for (let i = 0; i < extra; i += 1) {
@@ -256,7 +256,7 @@ test('a) turn-stopping 首轮命中(nudgeInterval=1):队列 JSON 结构 / 截断
   assert.equal(queue.producer, 'dsh-auto-evolve')
   assert.equal(queue.sessionId, 'sess-abc/weird', 'sessionId 保留原始值')
   assert.equal(queue.turn, 1)
-  assert.equal(queue.cwd, 'C:/Users/DawnCloud/.dsh/profiles/desktop')
+  assert.equal(queue.cwd, 'C:/work/dsh-profile')
   assert.ok(!Number.isNaN(Date.parse(queue.createdAt)), 'createdAt 是 ISO 时间')
   assert.equal(queue.messageCount, 5, 'system 消息被过滤')
   assert.equal(queue.messages.length, 5)
