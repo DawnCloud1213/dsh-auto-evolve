@@ -68,8 +68,11 @@ Node：优先环境变量 `DSH_NODE_PATH`，否则用 PATH 里的 `node`。
 
 行为：
 1. 读入 transcript（见 §1）；
-2. 拼审查 prompt（严格 JSON 输出）；
-3. 调 `https://api.deepseek.com/chat/completions`，model `deepseek-chat`，key 从 `~/.dsh/.credentials.yaml` 取 `DEEPSEEK_API_KEY`；temperature 0.2、max_tokens 3000、`response_format: json_object`，时间戳记 tokens；
+2. 解析审查模型（`lib/review-config.mjs`）：默认跟随 DSH 主提供商 / 主模型（`agent-default-model`，用户覆盖读 `~/.dsh/settings.yaml`），
+   路由取 `llm-pi-ai.providers.<provider>` 的 `baseURL` / `apiKeyEnv`，密钥取 `~/.dsh/.credentials.yaml` 的 `refs`；
+   思考强度默认 `high`（`auto-evolve.reviewReasoningEffort` 可调，`off` 表示不发送），以 `reasoning_effort` 字段传给 OpenAI 兼容端点；
+   环境变量 `DSH_REVIEW_*` 可覆盖；配置缺失时回退 `deepseek-chat` + `DEEPSEEK_API_KEY`，并把问题记进 `last-result.reviewTarget.problems`；
+3. 调该提供商的 `chat/completions`，temperature 0.2、`max_tokens` 3000（stage1 1200 / stage2 4000）、`response_format: json_object`，时间戳记 tokens；
 4. 决策 none / draft（confidence ≥ 0.6）→ 写 `drafts/<slug>.md`（frontmatter 带 `status: draft`、confidence、evidence）+ `ledger.jsonl` 一行；
 5. 永远写 `review/last-result.json`：`{at, trigger, sessionId, turn, decision, skill?, reason, tokens, model, error?, queueFile?}`；
 6. 异常/超时全部吞掉，**进程退出码恒 0**；日志追加 `review/bg-review.log`；

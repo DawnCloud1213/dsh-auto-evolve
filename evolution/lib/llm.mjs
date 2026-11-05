@@ -74,6 +74,7 @@ export async function chatJson({
   apiKey,
   endpoint = DEFAULT_ENDPOINT,
   model = DEFAULT_MODEL,
+  reasoningEffort = null,
   temperature = 0.2,
   maxTokens = 3000,
   timeoutMs = 90000,
@@ -92,6 +93,8 @@ export async function chatJson({
     model,
     temperature,
     max_tokens: maxTokens,
+    // OpenAI 兼容字段：思考强度。'off' 表示不传，交给服务端默认。
+    ...(reasoningEffort && reasoningEffort !== 'off' ? { reasoning_effort: reasoningEffort } : {}),
     response_format: { type: 'json_object' },
     messages: [
       ...(system ? [{ role: 'system', content: system }] : []),

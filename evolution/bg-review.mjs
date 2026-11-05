@@ -11,7 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { chatJson, DEFAULT_MODEL, readApiKey } from './lib/llm.mjs';
+import { chatJson, DEFAULT_MODEL } from './lib/llm.mjs';
+import { resolveReviewTarget } from './lib/review-config.mjs';
 import {
   findSessionFile,
   readSessionFile,
@@ -358,12 +359,28 @@ async function main() {
     }
 
     // ---------- 2. 第一段：只带技能库清单，决定 none / create / patch ----------
-    let apiKey;
-    try {
-      apiKey = readApiKey();
-    } catch (e) {
-      return finalize({ decision: 'error', error: 'no-api-key: ' + String(e && e.message ? e.message : e), reason: 'cannot read DEEPSEEK_API_KEY' }, opts);
+    // 审查走「跟随主提供商 + 主模型」：目标模型、端点、密钥、思考强度统一由 review-config 解析。
+    const target = resolveReviewTarget();
+    result.reviewTarget = {
+      provider: target.provider,
+      model: target.model,
+      endpoint: target.endpoint,
+      reasoningEffort: target.reasoningEffort,
+      viaReasoning: target.viaReasoning,
+      source: target.source,
+      problems: target.problems,
+    };
+    appendLog('review-target ' + JSON.stringify({
+      provider: target.provider, model: target.model, endpoint: target.endpoint,
+      reasoningEffort: target.reasoningEffort, viaReasoning: target.viaReasoning,
+      source: target.source, problems: target.problems,
+    }));
+    result.model = target.model;
+    if (target.problems.length > 0) console.log('[review-target] ' + target.problems.join(' | '));
+    if (!target.apiKey) {
+      return finalize({ decision: 'error', error: 'no-api-key: ' + target.problems.join('; '), reason: 'cannot resolve review model credentials' }, opts);
     }
+    const apiKey = target.apiKey;
 
     const WRITE_MIN_CONFIDENCE = 0.7;
     const index = loadSkillIndex(LEDGER_FILE);
@@ -371,6 +388,8 @@ async function main() {
     result.skillCount = index.length;
 
     if (opts.dryRun) {
+      console.log('[dry-run] 审查目标: provider=' + target.provider + ' model=' + target.model + ' endpoint=' + target.endpoint);
+      console.log('[dry-run] 思考强度: ' + (target.viaReasoning ? target.reasoningEffort + ' (reasoning_effort)' : '不发送') + ' | 来源=' + JSON.stringify(target.source));
       console.log('[dry-run] 不调用模型、不写库。技能库条数=' + index.length);
       console.log('[dry-run] 清单预览(前15行):');
       console.log(indexText.split('\n').slice(0, 15).join('\n'));
@@ -394,7 +413,8 @@ async function main() {
     let res1;
     try {
       res1 = await chatJson({
-        prompt: stage1Prompt, apiKey, model: DEFAULT_MODEL, temperature: 0.2,
+        prompt: stage1Prompt, apiKey, endpoint: target.endpoint, model: target.model,
+        reasoningEffort: target.viaReasoning ? target.reasoningEffort : null, temperature: 0.2,
         maxTokens: 1200, timeoutMs: 90000, retries: 2, backoffMs: [2000, 6000], totalMs: 180000,
       });
     } catch (e) {
@@ -479,7 +499,8 @@ async function main() {
     try {
       res2 = await chatJson({
         prompt: mode === 'create' ? buildCreatePrompt({ transcript, decision: d1 }) : buildPatchPrompt({ skillText: oldText, decision: d1 }),
-        apiKey, model: DEFAULT_MODEL, temperature: 0.2, maxTokens: 4000, timeoutMs: 120000,
+        apiKey, endpoint: target.endpoint, model: target.model,
+        reasoningEffort: target.viaReasoning ? target.reasoningEffort : null, temperature: 0.2, maxTokens: 4000, timeoutMs: 120000,
         retries: 2, backoffMs: [2000, 6000], totalMs: 240000,
       });
     } catch (e) {

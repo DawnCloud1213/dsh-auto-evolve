@@ -124,12 +124,29 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 插件 turn-stopping → 写 <evolutionDir>/review/queue/*.json
   → detached spawn node bg-review.mjs --queue-file <file> --trigger plugin
       ├─ 读队列（优先 transcript）
-      ├─ 两段式 LLM 审查（deepseek-chat，严格 JSON）
+      ├─ 解析审查模型：跟随主提供商 / 主模型（见下节），思考强度默认 high
+      ├─ 两段式 LLM 审查（严格 JSON）
       ├─ none：只记账；draft（conf ≥ 0.6）：写 drafts/<slug>.md + ledger.jsonl
       ├─ 直接改写/转正已有技能（diff + 备份 + 校验）
-      ├─ 删队列文件；写 review/last-result.json
+      ├─ 删队列文件；写 review/last-result.json（含 reviewTarget 实际用的模型/端点/强度）
       └─ 退出码恒 0（异常全吞，日志 review/bg-review.log）
 ```
+
+### 审查用哪个模型
+
+**默认跟随 DSH 的主提供商与主模型**（读 `agent-default-model` 配置，用户改过模型就读 `~/.dsh/settings.yaml` 的覆盖层），
+走该提供商自己的端点和密钥（`llm-pi-ai` 的 `baseURL` / `apiKeyEnv`），**不再另开 DeepSeek 官方 API**。
+
+思考强度可调，默认 `high`：在 DSH 桌面端 **设置 → 插件 → 插件配置** 里的「审查思考强度」卡片选择；
+写入值落在 `~/.dsh/settings.yaml` 的 `auto-evolve.reviewReasoningEffort`，下次审查生效。
+`off` 表示不发送该参数。
+
+| 覆盖方式（优先级从高到低） | 说明 |
+|:--|:--|
+| 环境变量 `DSH_REVIEW_PROVIDER / MODEL / BASE_URL / ENDPOINT / API_KEY / API_KEY_ENV / REASONING_EFFORT` | 临时/脚本覆盖 |
+| `~/.dsh/settings.yaml`：`agent-default-model`、`auto-evolve.reviewReasoningEffort` | DSH 界面写入的用户层 |
+| profile 的 `cordis.patch.yml`：`agent-default-model` + `llm-pi-ai.providers` | 组合配置默认值 |
+| 兜底：`deepseek-chat` + `DEEPSEEK_API_KEY` | 配置缺失时保持可运行，问题会写进 `last-result.json` 的 `reviewTarget.problems` |
 
 审查器不需要安装依赖：只用 Node 内置模块。**插件会自动使用包里自带的 `evolution/bg-review.mjs`**，
 运行数据（队列 / 草稿 / 账本 / 心跳）仍写到 `<evolutionDir>`（默认 `~/.dsh/evolution`，首次运行自动建目录）——
@@ -140,8 +157,8 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
 
 运行前提：
 - `node` ≥ 20：插件按 `DSH_NODE_PATH` → Windows 标准安装路径 → PATH 的顺序找。
-- `~/.dsh/.credentials.yaml` 里有 `DEEPSEEK_API_KEY`（审查器自己读，**不读环境变量、不写日志**）。
-- **数据外发**：队列文件含会话内容，会被发往 `api.deepseek.com` 做审查；不想发就把插件 `enabled: false`，或改 `evolution/lib/llm.mjs` 的 endpoint。
+- 主提供商的密钥（profile 里 `apiKeyEnv` 指向的引用，存在 `~/.dsh/.credentials.yaml`）。
+- **数据外发**：队列文件含会话内容，会被发往主提供商的模型端点做审查；不想发就把插件 `enabled: false`。
 - 草稿不会自动生效：人在会话里看到「【后台沉淀草稿待审】」后决定转正 / 合并 / 丢弃。
 
 ## 安装
@@ -194,7 +211,8 @@ profile 的 `package.json` 删掉依赖 + `dsh.profile.bundles` 删掉条目 →
 ## 注意
 
 - 插件只负责**导出消息**，真正的 LLM 审查、草稿落盘、账本都在 `bg-review.mjs`：改审查逻辑不用重启 DSH。
-- 队列文件含会话内容，会被 `bg-review.mjs` 发往云端模型（`deepseek-chat`）；不想发就 `enabled: false`。
+- 队列文件含会话内容，会被 `bg-review.mjs` 发往**主提供商的模型端点**做审查；不想发就 `enabled: false`。
+- 设置卡片（`auto-evolve` namespace）用 `@deepseek-ai/schemastery` 动态导入注册：依赖不可用时静默跳过，审查仍按默认 `high` 工作。
 - 不静态 `import` 任何外部包：`createUserMessage` 走 `import('@deepseek-ai/dsh-llm')`，失败则手造 `{ id: randomUUID(), role: 'user', ... }`，
   这样用 `file:` 依赖装进 profile 时不会因解析不到裸包名而加载失败。
 
