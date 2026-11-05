@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
 
 const plugin = await import(new URL('../lib/index.js', import.meta.url).href)
 
@@ -656,4 +657,20 @@ test('n) 插件自己注入的消息不进 review 队列(source.kind 以 plugin:
   assert.ok(!JSON.stringify(queue).includes('AGENTS.md'), '指令注入不得进 review 语料')
   assert.ok(queue.transcript.includes('真用户说的话'), '真实用户消息保留')
   assert.ok(queue.transcript.includes('[assistant] 好的'))
+})
+
+test('o) 不配 bgReviewScript 时默认用包内 evolution/（装完即用，免手动复制）', () => {
+  const evolutionDir = path.join(makeRoot(), 'evolution')
+  const ctx = makeMockCtx()
+  plugin.apply(ctx, { evolutionDir, enabled: false }) // 关掉触发，避免真的拉起审查器
+  const heartbeat = readHeartbeat(path.join(evolutionDir, 'review', 'plugin-heartbeat.json'))
+  const expected = path.resolve(fileURLToPath(new URL('../evolution/bg-review.mjs', import.meta.url)))
+  assert.equal(path.resolve(String(heartbeat.bgReviewScript)), expected, '默认应指向包内审查器')
+
+  // 显式配置优先于自动定位（老用户手工复制到 evolutionDir 的装法仍然成立）
+  const ctx2 = makeMockCtx()
+  const custom = path.join(evolutionDir, 'custom-bg-review.mjs')
+  plugin.apply(ctx2, { evolutionDir, enabled: false, bgReviewScript: custom })
+  const heartbeat2 = readHeartbeat(path.join(evolutionDir, 'review', 'plugin-heartbeat.json'))
+  assert.equal(path.resolve(String(heartbeat2.bgReviewScript)), path.resolve(custom), '显式配置不得被覆盖')
 })

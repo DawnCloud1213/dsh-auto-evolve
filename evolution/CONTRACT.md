@@ -7,7 +7,7 @@
 | 路径 | 说明 |
 |:--|:--|
 | 仓库根目录 | 插件包源码（`package.json` / `cordis.patch.yml` / `lib/` / `test/`） |
-| `evolution/` | 审查器源码：`bg-review.mjs`、`lib/`；安装时整体复制到 `<evolutionDir>/` |
+| `evolution/` | 审查器源码：`bg-review.mjs`、`lib/`；**随包分发**，插件自动定位 `<pkg>/evolution/bg-review.mjs`（显式 `bgReviewScript` 优先，包里找不到才回退 `<evolutionDir>/bg-review.mjs`），无需手动复制 |
 | `<evolutionDir>` | 运行期数据目录，默认 `~/.dsh/evolution`；`review/`、`drafts/`、`ledger.jsonl` 都在它下面 |
 
 Node：优先环境变量 `DSH_NODE_PATH`，否则用 PATH 里的 `node`。

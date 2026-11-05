@@ -131,15 +131,12 @@ DSH 的 cordis 原生宿主插件（M3-a）。替代 M1 那套「解压多帧 zs
       └─ 退出码恒 0（异常全吞，日志 review/bg-review.log）
 ```
 
-审查器不需要安装依赖：只用 Node 内置模块。**复制到数据目录即可**：
+审查器不需要安装依赖：只用 Node 内置模块。**插件会自动使用包里自带的 `evolution/bg-review.mjs`**，
+运行数据（队列 / 草稿 / 账本 / 心跳）仍写到 `<evolutionDir>`（默认 `~/.dsh/evolution`，首次运行自动建目录）——
+**装完重启即可，不用手动复制任何文件**。
 
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\evolution" | Out-Null
-Copy-Item -Recurse -Force .\evolution\* "$env:USERPROFILE\.dsh\evolution\"
-```
-
-> 也可以不复制：把插件配置里的 `bgReviewScript` 指向仓库里的 `evolution/bg-review.mjs`。
-> 但技能使用遥测会从 `<evolutionDir>/lib/skill-usage.mjs` 动态加载，建议还是整目录复制。
+> 想换成自己的审查器：把插件配置里的 `bgReviewScript` 指到任意路径（显式配置优先）。
+> 旧版「手工复制到 `<evolutionDir>/`」的装法仍然兼容：包里找不到时才回退到 `<evolutionDir>/bg-review.mjs`。
 
 运行前提：
 - `node` ≥ 20：插件按 `DSH_NODE_PATH` → Windows 标准安装路径 → PATH 的顺序找。
@@ -149,12 +146,21 @@ Copy-Item -Recurse -Force .\evolution\* "$env:USERPROFILE\.dsh\evolution\"
 
 ## 安装
 
+**方式 A：DSH 插件页直接装**（不需要 clone）——在插件管理里填 GitHub 地址（管理器按 `pnpm add` 的 spec 处理）：
+
+```
+https://github.com/DawnCloud1213/dsh-auto-evolve
+```
+
+**方式 B：手动接线**
+
 1. `git clone https://github.com/DawnCloud1213/dsh-auto-evolve.git`
 2. DSH profile 的 `package.json`：`dependencies` 加 `"@dawn/dsh-auto-evolve": "file:<clone 路径>"`，
    `dsh.profile.bundles` 数组加 `"@dawn/dsh-auto-evolve"`。
 3. 该 profile 目录执行 `pnpm install`。
-4. 把 `evolution/` 复制到 `~/.dsh/evolution/`（见上节）。
-5. 重启 DSH 桌面应用（cordis 宿主插件在主进程加载，热更不生效）；桌面端再刷新页面（Ctrl+R）才会注入「进化」Tab。
+4. 重启 DSH 桌面应用（cordis 宿主插件在主进程加载，热更不生效）；桌面端再刷新页面（Ctrl+R）才会注入「进化」Tab。
+
+> 审查链路随包分发、插件自动定位，**无需复制**；数据目录首次运行自动创建。
 
 > 首次上线想更保守，可先在 `cordis.patch.yml` 的 `config:` 里写 `enabled: false`，确认能加载、心跳出现后再改回。
 
