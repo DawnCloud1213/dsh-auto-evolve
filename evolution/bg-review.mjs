@@ -415,7 +415,7 @@ async function main() {
       res1 = await chatJson({
         prompt: stage1Prompt, apiKey, endpoint: target.endpoint, model: target.model,
         reasoningEffort: target.viaReasoning ? target.reasoningEffort : null, temperature: 0.2,
-        maxTokens: 1200, timeoutMs: 90000, retries: 2, backoffMs: [2000, 6000], totalMs: 180000,
+        maxTokens: 8000, timeoutMs: 90000, retries: 2, backoffMs: [2000, 6000], totalMs: 180000,
       });
     } catch (e) {
       return finalize({ decision: 'error', error: 'stage1-llm-failed: ' + String(e && e.message ? e.message : e), reason: 'stage1 model call failed', sessionId, turn, transcriptSource }, opts);

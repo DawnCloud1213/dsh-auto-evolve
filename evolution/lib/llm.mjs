@@ -125,7 +125,10 @@ export async function chatJson({
       try { data = JSON.parse(text); } catch (e) { throw new Error('bad response JSON: ' + String(e) + ' body=' + text.slice(0, 200)); }
       const choice = (data.choices && data.choices[0]) || null;
       const content = choice && choice.message && typeof choice.message.content === 'string' ? choice.message.content : '';
-      if (!content) throw new Error('empty completions content');
+      if (!content) throw new Error('empty completions content (finish_reason=' + (choice && choice.finish_reason) + ', max_tokens=' + body.max_tokens + ')');
+      if (choice && choice.finish_reason === 'length') {
+        throw new Error('output truncated by max_tokens=' + body.max_tokens + ' (finish_reason=length) — 请提高 maxTokens 或缩短 prompt');
+      }
       const json = extractJson(content);
       const usage = data.usage || {};
       return {
