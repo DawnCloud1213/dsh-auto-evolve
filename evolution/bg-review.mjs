@@ -502,11 +502,13 @@ async function main() {
         apiKey, endpoint: target.endpoint, model: target.model,
         reasoningEffort: target.viaReasoning ? target.reasoningEffort : null, temperature: 0.2,
         // stage2 要吐出整个 SKILL.md（patch = 改后的全文、create = 新文件），固定 4000 必然被
-        // finish_reason=length 截断。按目标文本长度动态给预算：中文约 2 字符/token，再留 4000 字符给
-        // JSON 包装（content/edits/evidence 等）；上限 16000 是模型单次输出的安全值。
+        // finish_reason=length 截断。按目标文本长度动态给预算：
+        //   中文实测约 1 字符 ≈ 2 token（含 JSON 转义），再加 2000 token 给 content/edits/evidence 包装。
+        // 教训：先按 2 字符/token 估过一次，4KB 的技能文件给了 4076 token 仍被截断 —— 中文别把系数往小了估。
+        // 上限 16000 是模型单次输出的安全值（超了会直接报 invalid max_tokens）。
         maxTokens: mode === 'create'
           ? 12000
-          : Math.min(16000, Math.max(4000, Math.ceil(((oldText ? oldText.length : 0) + 4000) / 2))),
+          : Math.min(16000, Math.max(4000, Math.ceil((oldText ? oldText.length : 0) * 2 + 2000))),
         timeoutMs: 120000,
         retries: 2, backoffMs: [2000, 6000], totalMs: 240000,
       });
