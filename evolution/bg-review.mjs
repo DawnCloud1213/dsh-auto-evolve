@@ -500,7 +500,14 @@ async function main() {
       res2 = await chatJson({
         prompt: mode === 'create' ? buildCreatePrompt({ transcript, decision: d1 }) : buildPatchPrompt({ skillText: oldText, decision: d1 }),
         apiKey, endpoint: target.endpoint, model: target.model,
-        reasoningEffort: target.viaReasoning ? target.reasoningEffort : null, temperature: 0.2, maxTokens: 4000, timeoutMs: 120000,
+        reasoningEffort: target.viaReasoning ? target.reasoningEffort : null, temperature: 0.2,
+        // stage2 要吐出整个 SKILL.md（patch = 改后的全文、create = 新文件），固定 4000 必然被
+        // finish_reason=length 截断。按目标文本长度动态给预算：中文约 2 字符/token，再留 4000 字符给
+        // JSON 包装（content/edits/evidence 等）；上限 16000 是模型单次输出的安全值。
+        maxTokens: mode === 'create'
+          ? 12000
+          : Math.min(16000, Math.max(4000, Math.ceil(((oldText ? oldText.length : 0) + 4000) / 2))),
+        timeoutMs: 120000,
         retries: 2, backoffMs: [2000, 6000], totalMs: 240000,
       });
     } catch (e) {
