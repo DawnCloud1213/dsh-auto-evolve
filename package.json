@@ -1,6 +1,6 @@
 {
   "name": "@dawn/dsh-auto-evolve",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DSH 自进化宿主插件（M3-a）+ 进化看板：每累计 N 次工具调用导出会话并 detached 拉起 bg-review，两段式审查后直接写技能库；会话页新增「进化」Tab，展示技能触发次数、进化路线与审查心跳。",
   "type": "module",
   "main": "lib/index.js",
