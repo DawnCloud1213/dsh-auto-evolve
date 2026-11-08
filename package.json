@@ -22,6 +22,7 @@
     "evolution/lib",
     "evolution/CONTRACT.md",
     "cordis.patch.yml",
+    "scripts",
     "README.md"
   ],
   "dsh": {

@@ -181,6 +181,120 @@ https://github.com/DawnCloud1213/dsh-auto-evolve
 
 > 首次上线想更保守，可先在 `cordis.patch.yml` 的 `config:` 里写 `enabled: false`，确认能加载、心跳出现后再改回。
 
+## 更新
+
+### 先说清楚：为什么插件页没有「更新」按钮
+
+DSH 插件管理器详情页的「更新」按钮有一个硬性的准入条件（宿主 `@deepseek-ai/dsh-plugin-manager` 的
+`updateAvailable()` / `updateRefusal()`）：
+
+```js
+function updateRefusal(bundle, name) {
+  if (!bundle.installed || bundle.availability !== "profile" || bundle.official) return "...";
+  const parsed = parsedForRegistry(bundle.source);
+  if (parsed.kind !== "registry" || parsed.name !== bundle.name) 
+    return `${bundle.name} is not installed from a registry under its own name`;
+  ...
+}
+```
+
+翻译成人话：**只有「从 npm registry 安装、且包名就是 registry 上的那个名字」的插件才会出现更新按钮。**
+本插件通过 `file:` 本地路径或自建 GitHub 仓库安装，`installTarget` 永远是 `undefined`，因此：
+
+- **插件详情页不会有「更新」按钮**，也不会有「可更新」标签；
+- 版本区的「更新到 x.y.z」也不会出现（它开头就调 `updateRefusal`，字符串返回即 `not-updatable`，根本不去查 registry）；
+- 这不是 bug，宿主自己的界面文案写着：「按需安装的官方插件会在版本与 DSH 不同时提供"更新"。
+  **其他插件请先卸载再安装新版。**」
+
+所以更新必须手动走下面这套流程——脚本已经把它封好了。
+
+### 方式 A：一键脚本（推荐）
+
+**Windows（PowerShell）**
+
+```powershell
+cd <插件仓库目录>
+.\scripts\update.ps1
+```
+
+或者直接**双击** `scripts\update.cmd`（已内置 `-ExecutionPolicy Bypass`，绕开执行策略限制）。
+
+脚本做的事：
+
+| 步骤 | 动作 | 为什么需要 |
+|:--|:--|:--|
+| 1 | 自动定位 DSH profile（默认 `~/.dsh/profiles/desktop`） | 省得手输路径 |
+| 2 | **备份**当前已装版本 + `package.json` + `pnpm-lock.yaml` 到临时目录 | 失败了能回退 |
+| 3 | 源码是 git 仓库就 `git pull --ff-only` 拉最新 | 保证装的是最新代码 |
+| 4 | **删除 `node_modules` 里的旧拷贝** | **关键**：pnpm 对 `file:` 依赖是「拷贝」不是软链，不删则 `install` 认为已是最新（这就是「改了代码却没生效」的经典坑） |
+| 5 | `pnpm install --prefer-offline` 重装 | 重新拷贝当前源码 |
+| 6 | 校验版本号 + 关键文件 SHA256 与源码目录一致 | 确认真的换成了新代码 |
+| 7 | 打印重启提醒 | 见下 |
+
+常用参数：
+
+```powershell
+.\scripts\update.ps1 -DryRun        # 预览，不改任何文件
+.\scripts\update.ps1 -SkipGitPull   # 不拉取源码（已手动同步过时用）
+.\scripts\update.ps1 -ProfileDir "D:\other\.dsh\profiles\work"
+.\scripts\update.ps1 -PnpmPath "C:\path\to\pnpm.cmd"
+```
+
+脚本会自动找 `node` 与 `pnpm`；**找不到独立 pnpm 时会自动改用 DSH 自带的 pnpm**
+（`<DSH 安装目录>\resources\runtime\primary-runtime\dependencies\pnpm\bin\pnpm.cjs`），
+所以只装了 DSH、没全局装 pnpm 的机器也能跑。
+
+**安装失败会自动回滚**：`pnpm install` 失败时脚本把备份的旧版本拷回去，DSH 行为与更新前一致。
+备份目录路径会打印在最后，确认新版本正常后可删。
+
+### 方式 B：手动命令（脚本不可用时）
+
+```powershell
+cd <你的 profile 目录，如 C:\Users\<你>\.dsh\profiles\desktop>
+
+# 1) 备份（可选但强烈建议）
+Copy-Item node_modules\@dawn\dsh-auto-evolve "$env:TEMP\dsh-auto-evolve-bak" -Recurse -Force
+
+# 2) 同步源码（如果是 clone 下来的仓库）
+git -C <插件仓库目录> pull --ff-only
+
+# 3) 删旧拷贝 —— 这一步不能省
+Remove-Item -Recurse -Force node_modules\@dawn\dsh-auto-evolve
+
+# 4) 重装
+pnpm install --prefer-offline
+```
+
+> 用 `link:` 或 `workspace:` 方式安装的（软链）可以跳过第 3 步，因为源码改动会直接生效；
+> 用 `file:` 安装的必须删，pnpm 检测不到源目录变化。
+
+### 方式 C：卸载后重装
+
+在 DSH **设置 → 插件** 里卸载，再按「安装」章节重新装一次。
+注意：本插件的配置在 profile 的 `cordis.patch.yml` 里（不在插件包内），重装不会丢配置。
+
+### 更新后必须重启 DSH
+
+**改完插件代码后一律完全退出并重启 DSH 桌面应用，不要相信热重载。**
+
+实测过的坑：热重载出来的实例只「活着」——心跳文件照写、`version` 也变了，
+但事件订阅没挂上，`turnsSeen` 永远是 0，插件「活着但没干活」。
+所以**验证插件是否真的生效，判据不是心跳存在，而是心跳字段在动**：
+
+```powershell
+Get-Content ~\.dsh\evolution\review\plugin-heartbeat.json
+```
+
+重启后应满足：
+
+1. `version` 是新版本号；
+2. `startedAt` 是刚才重启的时间；
+3. 聊完一轮后 `turnsSeen` 增长（这才是「默认接管了事件」的铁证）；
+4. `lastError` 为 `null`。
+
+> 只改 `evolution/bg-review.mjs` 这类审查脚本的话**不用重装也不用重启**——
+> 它是独立进程，每次审查都新起一个。只有改 `lib/*.js`（宿主插件本体）才需要走完整更新流程。
+
 ## 验证
 
 ```powershell
