@@ -674,3 +674,25 @@ test('o) 不配 bgReviewScript 时默认用包内 evolution/（装完即用，�
   const heartbeat2 = readHeartbeat(path.join(evolutionDir, 'review', 'plugin-heartbeat.json'))
   assert.equal(path.resolve(String(heartbeat2.bgReviewScript)), path.resolve(custom), '显式配置不得被覆盖')
 })
+
+// 回归:2026-11-09 之前的实现用全局单变量 lastToolCallCount 记录"已见工具调用数",
+// 跨会话共享且只升不降(Math.max 回写)。A 会话把水位顶高后,B 会话的 callsNow 从 0 涨
+// 永远追不上,delta 恒 0 → shouldTrigger() 首行 return false,此后一次审查都不触发。
+// 修复后按会话隔离计数,这里用 A/B 交替把旧行为钉死。
+test('p) 跨会话计数隔离:A 会话顶高水位后,B 会话仍能累计(跨会话卡死 bug 回归)', async () => {
+  const env = setupQueueEnv({ nudgeInterval: 100 }) // 阈值拉高,只观察计数不触发审查
+  // makeGrowingAgent 的基座消息里自带 1 个 tool-call,每 __grow() 再加 1 个
+  const agentA = makeGrowingAgent('sess-cross-A')
+  for (let i = 1; i <= 5; i += 1) await fireTurn(env.ctx, agentA, i)
+  const afterA = readHeartbeat(env.heartbeatFile)
+  assert.equal(afterA.itersTotal, 6, 'A 会话 5 轮:基座 1 个 + 每轮 +1 = 6')
+  assert.equal(afterA.itersSinceReview, 6)
+
+  const agentB = makeGrowingAgent('sess-cross-B')
+  for (let i = 1; i <= 3; i += 1) await fireTurn(env.ctx, agentB, i)
+  const afterB = readHeartbeat(env.heartbeatFile)
+  // 旧实现:A 把全局水位顶到 6 后,B 的 2/3/4 全被吞,itersTotal 停在 6。
+  // 新实现:B 从自己的 0 起步,第 1 轮 delta=2、后两轮各 1,合计 +4。
+  assert.equal(afterB.itersTotal, 10, 'B 会话 3 轮应再加 4 次(2+1+1);旧实现这里会停在 6')
+  assert.equal(afterB.itersSinceReview, 10)
+})
