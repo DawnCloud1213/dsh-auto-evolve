@@ -12,8 +12,17 @@ export const SKILL_ROOTS = [
   { dir: path.join(os.homedir(), '.agents', 'skills'), kind: 'external' },
 ];
 
-/** 自沉淀技能在 frontmatter 里的 createdBy 取值（视为 agent 所有）。 */
-const AGENT_MARKERS = ['self-evolution', 'bg-review', 'auto-evolve', 'auto-promote'];
+/**
+ * 自沉淀技能在 frontmatter 里的 createdBy 取值（视为 agent 所有）。
+ * 注意 'agent' 本身也算：主模型手写 frontmatter 时经常直接写 createdBy: agent，
+ * 早先漏掉这一项 → 这类技能被判成 user，既改不动也不进 curator 视野。
+ */
+const AGENT_MARKERS = ['self-evolution', 'bg-review', 'auto-evolve', 'auto-promote', 'agent'];
+
+/** 判断某个 createdBy 是否代表「自沉淀产物」。大小写与首尾空白不敏感，避免 Agent/AGENT 漏判。 */
+export function isAgentMarker(createdBy) {
+  return AGENT_MARKERS.includes(String(createdBy || '').trim().toLowerCase());
+}
 
 export function parseFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
@@ -55,7 +64,7 @@ export function readLedgerPromoted(ledgerFile) {
 function classifyOwner(kind, createdBy, slug, promotedSet) {
   if (kind === 'external') return 'external';
   if (kind === 'evolved') return 'agent'; // 用户 2026-11-01 拍板：导入的自沉淀技能算 agent 的，可改
-  if (AGENT_MARKERS.includes(String(createdBy || '').trim())) return 'agent';
+  if (isAgentMarker(createdBy)) return 'agent';
   if (promotedSet.has(slug)) return 'agent';
   return 'user';
 }
