@@ -38,7 +38,7 @@
     }
   },
   "scripts": {
-    "test": "node test/mock-ctx.mjs && node test/import-smoke.mjs && node test/dashboard-smoke.mjs && node test/review-config.mjs"
+    "test": "node test/mock-ctx.mjs && node test/import-smoke.mjs && node test/dashboard-smoke.mjs && node test/review-config.mjs && node test/patch-notice.mjs"
   },
   "license": "MIT"
 }
